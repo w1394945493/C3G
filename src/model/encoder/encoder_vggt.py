@@ -59,7 +59,7 @@ class EncoderVGGTCfg:
     gaussian_feature_dim : int = 0
     feature_dim: int = 0        ## don't setting it manually, it will be set in main.py
     different_learnable_tokens: bool = False
-    
+
 
 class EncoderVGGT(Encoder[EncoderVGGTCfg]):
     backbone: nn.Module
@@ -82,13 +82,13 @@ class EncoderVGGT(Encoder[EncoderVGGTCfg]):
 
         if cfg.freeze_backbone:
             self.backbone.set_freeze('encoder')
-                    
+
         transformer_dim = 2048
-        
+
         self.gaussian_tokens = nn.Parameter(torch.randn(cfg.num_gaussians, transformer_dim))
-        self.anchor_positions = nn.Parameter(torch.tensor([[0,0,1]]).repeat(cfg.num_gaussians,1), requires_grad=False)      
-        
-        
+        self.anchor_positions = nn.Parameter(torch.tensor([[0,0,1]]).repeat(cfg.num_gaussians,1), requires_grad=False)
+
+
         if self.cfg.feature_dim > 0:
             self.gmae_decoder = InstillTransformer(
                 dim = transformer_dim,
@@ -98,13 +98,13 @@ class EncoderVGGT(Encoder[EncoderVGGTCfg]):
                 mlp_dim = transformer_dim * 2,
                 cfg = cfg,
             )
-            
+
             if self.cfg.different_learnable_tokens:
                 self.gaussian_tokens_feature = nn.Parameter(torch.randn(cfg.num_gaussians, self.cfg.feature_dim))
                 self.feature_gmae_to_gaussians = nn.Linear(self.cfg.feature_dim, self.cfg.gaussian_feature_dim * cfg.gaussians_per_token)
             else:
                 self.feature_gmae_to_gaussians = nn.Linear(transformer_dim, self.cfg.gaussian_feature_dim * cfg.gaussians_per_token)
-            
+
         else:
             self.gmae_decoder = Transformer(
                 dim = transformer_dim,
@@ -114,7 +114,7 @@ class EncoderVGGT(Encoder[EncoderVGGTCfg]):
                 mlp_dim = transformer_dim * 2,
                 cfg = cfg,
             )
-        
+
         self.gmae_to_gaussians = nn.Linear(transformer_dim, self.raw_gs_dim * cfg.gaussians_per_token)
 
 
@@ -148,25 +148,25 @@ class EncoderVGGT(Encoder[EncoderVGGTCfg]):
         context_feature: Optional[Tensor] = None,
     ) -> Gaussians:
         device = context["image"].device
-        b, v, _, h, w = context["image"].shape
+        b, v, _, h, w = context["image"].shape # (b v 3 h w)
 
         # Encode the context images.
         if self.cfg.freeze_backbone:
             with torch.no_grad():
                 dec, shape, patch_start_idx = self.backbone(context, return_views=False)
         else:
-            dec, shape, patch_start_idx = self.backbone(context, return_views=False)
-            
+            dec, shape, patch_start_idx = self.backbone(context, return_views=False) # todo backbone: DinoVisionTransformer
+
         with torch.amp.autocast('cuda', enabled=False):
             with torch.no_grad():
-                res = self.dpt_head(dec, context['image'], patch_start_idx)
+                res = self.dpt_head(dec, context['image'], patch_start_idx) # todo dpt_head: 冻结的 context['image'].shape: (b v 3 224 224) 归一化到-1~1之间
                 vis_depth = res[0][..., -1]   # shape: (B, N, H, W) ## for visualization
-            
-        dec_feat = dec[-1][:, :, patch_start_idx:]
-        dec_feat = rearrange(dec_feat, "b v n d -> b (v n) d")
-        all_decoder_tokens = torch.cat((dec_feat, self.gaussian_tokens.unsqueeze(0).expand(b, -1, -1),), dim=1)
-        
-        if self.cfg.feature_dim > 0 and context_feature is not None:
+
+        dec_feat = dec[-1][:, :, patch_start_idx:] # todo (b v (H/14 W/14) 2048)
+        dec_feat = rearrange(dec_feat, "b v n d -> b (v n) d") # todo (b (v H/14 W/14) 2048)   224 /14 + 224 /14 = 256 v = 24,则 256x24=6144
+        all_decoder_tokens = torch.cat((dec_feat, self.gaussian_tokens.unsqueeze(0).expand(b, -1, -1),), dim=1) # todo self.gaussian_tokens: (2048 2048) 共 6144 + 2048 = 8192个
+        # todo all_decoder_tokens: 将dec_feat与all_decoder_tokens cat一下
+        if self.cfg.feature_dim > 0 and context_feature is not None: # todo 这个没有用到
             # context_feature = rearrange(context_feature, "b v c h w -> b (v h w) c")
             # context_feature = torch.cat((context_feature, self.gaussian_tokens_feature.unsqueeze(0).expand(b, -1, -1)), dim=1)
             context_feature = rearrange(context_feature, "b v c h w -> b (v h w) c")
@@ -175,40 +175,40 @@ class EncoderVGGT(Encoder[EncoderVGGTCfg]):
             else:
                 context_zero_feature = torch.zeros((b, context_feature.shape[1], dec_feat.shape[2] - context_feature.shape[2]), device=device)
                 context_feature = torch.cat((context_feature, context_zero_feature), dim=-1)
-                
+
                 context_feature = torch.cat((context_feature, self.gaussian_tokens.unsqueeze(0).expand(b, -1, -1)), dim=1)
-                
-        if self.cfg.feature_dim > 0:
+        # todo：
+        if self.cfg.feature_dim > 0: # todo 0
             decoded_tokens, decoded_feature_token = self.gmae_decoder(all_decoder_tokens, mask=None, context_feature=context_feature)  # b n d
         else:
-            decoded_tokens = self.gmae_decoder(all_decoder_tokens, mask=None)  # b n d
-            
-        gaussian_params = self.gmae_to_gaussians(decoded_tokens[:, -self.gaussian_tokens.shape[0]:])  # b n d(3+1+d')
-        
+            decoded_tokens = self.gmae_decoder(all_decoder_tokens, mask=None)  # b n d # todo gmae_decoder: Transformer注意力交互： 注意力 + 前馈网络
+        # todo decoded_tokens[:, -self.gaussian_tokens.shape[0]:]: 取出最后的2048个查询 ： self.gmae_to_gaussians: 线性层 2048 -> 14 的线性层
+        gaussian_params = self.gmae_to_gaussians(decoded_tokens[:, -self.gaussian_tokens.shape[0]:])  # b n d(3+1+d') # todo (b 2048 14)
+
         if self.cfg.feature_dim > 0:
             feature_gaussian_params = self.feature_gmae_to_gaussians(decoded_feature_token[:, -self.gaussian_tokens.shape[0]:])  # b n d(3+1+d')
-        
+        # todo gaussians_per_token: 每个查询负责预测的高斯点数量
         gaussian_params = rearrange(gaussian_params, "b n (gpt c) -> b (n gpt) c", gpt=self.cfg.gaussians_per_token, c=self.raw_gs_dim)
-        
+
         pts_all = gaussian_params[:, :, :3].unsqueeze(-2) + self.anchor_positions.unsqueeze(dim=0).repeat(b,self.cfg.gaussians_per_token,1).unsqueeze(dim=2) # b n 3
-        depths = pts_all[..., -1].unsqueeze(-1)
+        depths = pts_all[..., -1].unsqueeze(-1) # todo (b 2048 1 1)
 
         # except_feature = (-self.cfg.gaussian_feature_dim or None) if not self.cfg.feature_dim > 0 else None
         # gaussians = gaussian_params[:, :, 3:except_feature]
-        gaussians = gaussian_params[:,:,3:]
+        gaussians = gaussian_params[:,:,3:] # todo (b 2048 11)
         gaussians = rearrange(gaussians, "... (srf c) -> ... srf c", srf=self.cfg.num_surfaces)
         densities = gaussians[..., 0].sigmoid().unsqueeze(-1)
-        if self.cfg.feature_dim > 0:
+        if self.cfg.feature_dim > 0: # todo 0
             gaussian_feature = rearrange(feature_gaussian_params, "b n (gpt c) -> b (n gpt) c", gpt=self.cfg.gaussians_per_token, c=self.cfg.gaussian_feature_dim)
         else:
             gaussian_feature = None
 
         # Convert the features and depths into Gaussians.
-        if self.cfg.pose_free:
+        if self.cfg.pose_free: # todo True
             gaussians = self.gaussian_adapter.forward(
                 pts_all.unsqueeze(-2),
                 depths,
-                self.map_pdf_to_opacity(densities, global_step),
+                self.map_pdf_to_opacity(densities, global_step), # todo 和MonoSplat等工作对密度的处理方式一致
                 rearrange(gaussians[..., 1:], "b n srf c -> b n srf () c"),
                 features = gaussian_feature,
             )
@@ -218,7 +218,7 @@ class EncoderVGGT(Encoder[EncoderVGGTCfg]):
             xy_ray = xy_ray[None, None, ...].expand(b, v, -1, -1, -1)
 
             gaussians = self.gaussian_adapter.forward(
-                rearrange(context["extrinsics"], "b v i j -> b v () () () i j"),
+                rearrange(context["extrinsics"], "b v i j -> b v () () () i j"), # todo 未用到
                 rearrange(context["intrinsics"], "b v i j -> b v () () () i j"),
                 rearrange(xy_ray, "b v r srf xy -> b v r srf () xy"),
                 depths,

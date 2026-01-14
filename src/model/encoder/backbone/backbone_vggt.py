@@ -49,14 +49,14 @@ class BackboneVGGT(VGGT):
                 return_views=False,
                 ):
         b, v, _, h, w = context["image"].shape
-        images_all = context["image"]
+        images_all = context["image"] # todo (b v 3 h w)
 
         # step 1: encoder input images
         shape_all = torch.tensor(images_all.shape[-2:])[None].repeat(b*v, 1)
-        aggregated_tokens_list, patch_start_idx = self.aggregator(images_all)
+        aggregated_tokens_list, patch_start_idx = self.aggregator(images_all) # len -> 
 
         shape = rearrange(shape_all, "(b v) c -> b v c", b=b, v=v)
-        
+
 
         return aggregated_tokens_list, shape, patch_start_idx
 

@@ -1,0 +1,28 @@
+{
+    // 使用 IntelliSense 了解相关属性。
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "re10k multi-view test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/home/lianghao/wangyushen/Projects/C3G/src/main.py",
+            "args": [
+                "+evaluation=re10k_multiview",
+                "mode=test",
+                "dataset/view_sampler@dataset.re10k.view_sampler=evaluation",
+                "dataset.re10k.view_sampler.index_path=assets/evaluation_index_re10k.json",
+                "dataset.re10k.roots=[/home/lianghao/wangyushen/data/wangyushen/Datasets/re10k/re10k_subset]",
+                "test.save_compare=true",
+                "wandb.mode=disabled",
+                "checkpointing.load=/home/lianghao/wangyushen/data/wangyushen/Weights/c3g/gaussian_decoder_multiview.ckpt",
+                "wandb.name=wandb_name",
+                "output_dir=/home/lianghao/wangyushen/data/wangyushen/Output/c3g/debug",
+                "hydra.run.dir=/home/lianghao/wangyushen/data/wangyushen/Output/c3g/debug/exp_debug/",
+            ],
+            "console": "integratedTerminal"
+        }
+    ]
+}

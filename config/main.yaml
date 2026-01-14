@@ -70,3 +70,5 @@ trainer:
 hydra:
   run:
     dir: outputs/exp_${wandb.name}/${now:%Y-%m-%d_%H-%M-%S}
+
+output_dir: null

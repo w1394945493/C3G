@@ -1,4 +1,9 @@
+# 设置进程名
+from setproctitle import setproctitle
+setproctitle("wys")
 import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+
 from pathlib import Path
 
 import hydra
@@ -7,11 +12,20 @@ import wandb
 import signal
 from colorama import Fore
 from jaxtyping import install_import_hook
-from lightning.pytorch import Trainer
-from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
-from lightning.pytorch.loggers.wandb import WandbLogger
-from lightning.pytorch.strategies import DDPStrategy
+# from lightning.pytorch import Trainer
+# from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+# from lightning.pytorch.loggers.wandb import WandbLogger
+# from lightning.pytorch.strategies import DDPStrategy
+from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import LearningRateMonitor,ModelCheckpoint
+from pytorch_lightning.loggers.wandb import WandbLogger
+from pytorch_lightning.strategies import DDPStrategy
+
 from omegaconf import DictConfig, OmegaConf
+
+#-----------------------#
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.misc.weight_modify import checkpoint_filter_fn
 from src.model.distiller import get_distiller
@@ -48,9 +62,13 @@ def train(cfg_dict: DictConfig):
     set_cfg(cfg_dict)
 
     # Set up the output directory.
-    output_dir = Path(
-        hydra.core.hydra_config.HydraConfig.get()["runtime"]["output_dir"]
-    )
+    if cfg_dict.output_dir is None:
+        output_dir = Path(
+            hydra.core.hydra_config.HydraConfig.get()["runtime"]["output_dir"]
+        )
+    else:
+        output_dir = Path(cfg_dict.output_dir)
+        os.makedirs(output_dir, exist_ok=True)
     print(cyan(f"Saving outputs to {output_dir}."))
 
     # Set up logging with wandb.
@@ -115,7 +133,8 @@ def train(cfg_dict: DictConfig):
         accumulate_grad_batches=cfg.trainer.accumulate_grad_batches,
     )
     torch.manual_seed(cfg_dict.seed + trainer.global_rank)
-    
+
+    # todo ----------------------------------------------------------------------------------#
     vggt, dino, lseg_feature_extractor, clip, feature_dim = load_foundation_model(cfg)
     cfg.model.encoder.feature_dim = feature_dim if cfg.train.feature_rendering_loss > 0 else 0
 
@@ -144,7 +163,7 @@ def train(cfg_dict: DictConfig):
             del new_ckpt
         else:
             raise ValueError(f"Invalid checkpoint format: {weight_path}")
-        
+
         del ckpt_weights
 
 

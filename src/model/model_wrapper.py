@@ -9,9 +9,15 @@ import torch.nn.functional as F
 import wandb
 from einops import pack, rearrange, repeat
 from jaxtyping import Float
-from lightning.pytorch import LightningModule
-from lightning.pytorch.loggers.wandb import WandbLogger
-from lightning.pytorch.utilities import rank_zero_only
+
+# from lightning.pytorch import LightningModule
+# from lightning.pytorch.loggers.wandb import WandbLogger
+# from lightning.pytorch.utilities import rank_zero_only
+
+from pytorch_lightning import LightningModule
+from pytorch_lightning.loggers.wandb import WandbLogger
+from pytorch_lightning.utilities import rank_zero_only
+
 from tabulate import tabulate
 from torch import Tensor, nn, optim
 from torchmetrics import JaccardIndex, Accuracy
@@ -91,7 +97,7 @@ class TrajectoryFn(Protocol):
         Float[Tensor, "batch view 3 3"],  # intrinsics
     ]:
         pass
-    
+
 class ModelWrapper(LightningModule):
     logger: Optional[WandbLogger]
     encoder: nn.Module
@@ -132,7 +138,7 @@ class ModelWrapper(LightningModule):
         self.data_shim = get_data_shim(self.encoder)
         self.losses = nn.ModuleList(losses)
         self.mode=mode
-            
+
         self.vggt=vggt
         self.lseg_feature_extractor = lseg_feature_extractor
 
@@ -143,12 +149,12 @@ class ModelWrapper(LightningModule):
             self.latent_var = dino['latent_var'] if dino['latent_var'] is not None else 1
         else:
             self.dino_model, self.dino_processor = None, None
-            
+
         if clip is not None:
             self.clip_model = clip['model']
         else:
             self.clip_model = None
-            
+
         # This is used for testing.
         self.benchmarker = Benchmarker()
         self.miou = JaccardIndex(
@@ -156,7 +162,7 @@ class ModelWrapper(LightningModule):
             num_classes=len(self.test_cfg.labels) + 1,
             ignore_index=0,
         )
-        
+
         self.acc = Accuracy(
             task="multiclass",
             num_classes=len(self.test_cfg.labels) + 1,
@@ -165,7 +171,7 @@ class ModelWrapper(LightningModule):
 
         self.per_image_ious = []
         self.per_image_accs = []
-        
+
 
     def training_step(self, batch, batch_idx):
         # combine batch from different dataloaders
@@ -197,7 +203,7 @@ class ModelWrapper(LightningModule):
                 t = torch.tensor([num_ctx_views], dtype=torch.int64, device=self.device)
                 dist.broadcast(t, src=0)
                 num_ctx_views = int(t.item())
-                        
+
             ctx = {}
             for key, value in batch['context'].items():
                 if key == 'overlap':
@@ -205,13 +211,13 @@ class ModelWrapper(LightningModule):
                     continue
                 ctx[key] = value[:, :num_ctx_views, ...].contiguous()
             batch['context'] = ctx
-        
+
         # Run the model.
         visualization_dump = {}
-        
-        context_feature = self.forward_foundation_model(batch['context']['image']) if self.encoder.cfg.feature_dim else None        
-        gaussians = self.encoder(batch["context"], self.global_step, visualization_dump=visualization_dump, context_feature = context_feature)        
-        
+
+        context_feature = self.forward_foundation_model(batch['context']['image']) if self.encoder.cfg.feature_dim else None
+        gaussians = self.encoder(batch["context"], self.global_step, visualization_dump=visualization_dump, context_feature = context_feature)
+
         output = self.decoder.forward(
             gaussians,
             torch.cat([batch["target"]["extrinsics"],batch["context"]["extrinsics"]],dim=1),
@@ -238,27 +244,27 @@ class ModelWrapper(LightningModule):
             loss = loss_fn.forward(output, batch, gaussians, self.global_step, target_image=torch.cat([batch["target"]["image"], ((batch["context"]["image"] + 1) / 2)], dim=1))
             self.log(f"loss/{loss_fn.name}", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True) # only for coarse gaussians
             total_loss = total_loss + loss
-            
+
         if self.train_cfg.feature_rendering_loss > 0:
             B,CV,_,H,W = batch['context']['image'].shape
             B,TV,_,H,W = batch['target']['image'].shape
             feature = self.forward_foundation_model(torch.cat((batch["context"]["image"], batch['target']['image'] * 2 - 1), dim=1), interpolate=False)
             feature = torch.cat((feature[:,CV:], feature[:,:CV]), dim=1)        ## ordering: target -> context
-            
+
             gaussian_feature = output.feature
             B,N,_,FH,FW = feature.shape
-            
+
             gaussian_feature = F.interpolate(gaussian_feature.reshape(B*N,-1,H,W), size=(FH, FW), mode='bilinear', align_corners=False).reshape(B,N,-1,FH,FW)
-            
+
             gaussian_feature = F.normalize(gaussian_feature, p=2, dim=2)
             feature = F.normalize(feature, p=2, dim=2)
-            
-            feature_rendering_loss = F.cosine_similarity(gaussian_feature, feature.detach(), dim=2)                
+
+            feature_rendering_loss = F.cosine_similarity(gaussian_feature, feature.detach(), dim=2)
             feature_rendering_loss = (1 - feature_rendering_loss).mean()
-            
+
             self.log("loss/feature_rendering_loss", feature_rendering_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
             total_loss = total_loss + self.train_cfg.feature_rendering_loss * feature_rendering_loss
-                
+
         self.log("loss/total", total_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         if (
@@ -280,24 +286,24 @@ class ModelWrapper(LightningModule):
             self.step_tracker.set_step(self.global_step)
 
         return total_loss
-    
+
     @torch.no_grad()
     def forward_foundation_model(self, input_image, interpolate=True, vggt_tracking=False):
         B, V, C, H, W = input_image.shape       ## [-1~1]
-                
-        with torch.no_grad():              
+
+        with torch.no_grad():
             if self.train_cfg.reproj_model == 'dinov2':
                 context_feature = self.dino_model.get_intermediate_layers(input_image.reshape(B*V,C,H,W), reshape=True)[0].reshape(B,V,-1,H//14,W//14)
-                
+
             elif 'dinov3' in self.train_cfg.reproj_model:
                 context_feature = self.dino_model(**self.dino_processor((input_image.reshape(B*V,C,H,W) + 1)/2. * 255, return_tensors='pt').to(self.device))
                 context_feature = rearrange(context_feature['last_hidden_state'][:,5:], 'b (h w) c -> b c h w', h=H//16, w=W//16)
                 context_feature = context_feature.reshape(B,V,-1,H//16,W//16)
-                
+
             elif self.train_cfg.reproj_model == 'lseg':
                 context_feature = self.lseg_feature_extractor.extract_features(input_image.reshape(B*V,3,H,W))
                 context_feature = context_feature.reshape(B,V,-1,H//2,W//2)
-                
+
             elif 'vggt' in self.train_cfg.reproj_model:
                 if self.train_cfg.reproj_model=='vggt_tracking':
                     context_feature = self.vggt(input_image)['feature']
@@ -311,25 +317,25 @@ class ModelWrapper(LightningModule):
                 mean, std = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=self.device), torch.tensor([0.26862954, 0.26130258, 0.27577711], device=self.device)
                 input_image = (input_image - mean[None,None,:,None,None]) / std[None,None,:,None,None]
                 context_feature = self.clip_model(input_image.reshape(B*V,C,H,W))
-                context_feature = context_feature.reshape(B,V,-1,H,W)            
+                context_feature = context_feature.reshape(B,V,-1,H,W)
 
         if interpolate:
             context_feature = F.interpolate(context_feature.reshape(B*V,-1,context_feature.shape[-2],context_feature.shape[-1]), size=(H//14, W//14), mode='bilinear', align_corners=False).reshape(B,V,-1,H//14,W//14)
-                
+
         ## B, V, C, H, W
         return context_feature
-    
+
 
 
     def test_step(self, batch, batch_idx):
         batch: BatchedExample = self.data_shim(batch)
 
         b, v, _, h, w = batch["target"]["image"].shape
-        
+
         if h!=224 or w!=224:
             b, cv, _, ch, cw = batch['context']['image'].shape
             batch['context']['image'] = F.interpolate(batch['context']['image'].reshape(b*cv,3,ch,cw), size=(224,224), mode='bilinear', align_corners=False).reshape(b,cv,3,224,224)
-        
+
         assert b == 1
         if batch_idx % 100 == 0:
             print(f"Test step {batch_idx:0>6}.")
@@ -340,35 +346,38 @@ class ModelWrapper(LightningModule):
                 outputs.append(output)
             _ = self.encoder.gmae_decoder.layers[0][0].to_qkv.register_forward_hook(hook_fn)
             _ = self.encoder.gmae_decoder.layers[1][0].to_qkv.register_forward_hook(hook_fn)
-            
+        # todo ----------------------------------------------------#
+        # todo context_feature: 这个未用到
         # Render Gaussians.
-        context_feature = self.forward_foundation_model(batch['context']['image']) if self.encoder.cfg.feature_dim else None            
-        
+        context_feature = self.forward_foundation_model(batch['context']['image']) if self.encoder.cfg.feature_dim else None
+
+        # todo -----------------------------------------------------#
         with self.benchmarker.time("encoder"):
             gaussians = self.encoder(
                 batch["context"],
                 self.global_step,
                 context_feature=context_feature
-            )
-        
+            ) # gaussians.means: (b 2048 3)
+
         if self.test_cfg.visualize_gaussian_token>=0:
             num_heads = self.encoder.gmae_decoder.layers[0][0].heads
             gaussian_token_idx = self.test_cfg.visualize_gaussian_token
-            
+
             name = get_cfg()["wandb"]["name"]
             path = self.test_cfg.output_path / name
             (scene,) = batch["scene"]
             os.makedirs(path / scene , exist_ok=True)
-            
+
             visualize_attention_map(
                 outputs[0],batch, num_heads, gaussian_token_idx, batch['context']['image'].shape[3:5], patch_size = self.encoder.patch_size, output_path= path / scene / f"{gaussian_token_idx}_layer1")
-            
+
             visualize_attention_map(
                 outputs[1], batch, num_heads, gaussian_token_idx, batch['context']['image'].shape[3:5], patch_size = self.encoder.patch_size, output_path= path / scene /  f"{gaussian_token_idx}_layer2")
-            
+
             C0 = 0.28209479177387814
             gaussians.harmonics[:, gaussian_token_idx, :, 0] = (torch.tensor([[1,0,0]]) - 0.5) / C0
-        
+
+        # todo -----------------------------------------------------#
         if self.test_cfg.align_pose and (not self.test_cfg.forward_vfm):
             output = self.test_step_align(batch, gaussians, verbose=True)
         else:
@@ -389,7 +398,7 @@ class ModelWrapper(LightningModule):
 
             rgb_pred = output.color[0]
             rgb_gt = batch["target"]["image"][0]
-            
+
             psnr = compute_psnr(rgb_gt, rgb_pred).mean()
             all_metrics = {
                 f"lpips_ours": compute_lpips(rgb_gt, rgb_pred).mean(),
@@ -415,10 +424,10 @@ class ModelWrapper(LightningModule):
                 [a for a in output.color[0]],
                 path / "video" / f"{scene}_frame_{frame_str}.mp4",
             )
-            
+
         projections = render_projections(gaussians,256,extra_label="",low_pass = self.decoder.low_pass_filter, draw_label=False)[0]
         save_image(projections[2], path / f"{scene}_projections.png")
-        
+
         if self.test_cfg.save_compare:
             # Construct comparison image.
             context_img = inverse_normalize(batch["context"]["image"][0])
@@ -430,7 +439,7 @@ class ModelWrapper(LightningModule):
                 add_label(vcat(*error_map), "Error Map"),
             )
             save_image(comparison, path / f"{scene}_{psnr:.3f}.png")
-            
+
             if self.encoder.cfg.feature_dim:
                 gaussian_feature = output.feature
                 B,N,C,H,W = gaussian_feature.shape
@@ -442,7 +451,7 @@ class ModelWrapper(LightningModule):
                     target_image = batch['target']['image']
 
                 foundation_feature = self.forward_foundation_model((target_image * 2 - 1),interpolate=False)
-                
+
                 save_dir = path / scene / "seg"
                 save_gt_dir = path / scene / "seg_gt"
                 save_dir.mkdir(parents=True, exist_ok=True)
@@ -451,16 +460,16 @@ class ModelWrapper(LightningModule):
                 if 'dino' not in self.train_cfg.reproj_model and 'vggt' not in self.train_cfg.reproj_model:
                     pca_images, pca_vggt_images = [], []
                     V = gaussian_feature.shape[1]
-                    
+
                     for i in range(foundation_feature.shape[1]):
                         pca_gaussian_img = run_pca(gaussian_feature[0, i].unsqueeze(dim=0), (H,W))  # (C, H, W)
                         pca_images.append(pca_gaussian_img.squeeze(dim=0))
-                        
+
                         pca_vggt_img = run_pca(foundation_feature[0, i].unsqueeze(dim=0), (H,W))  # (C, H, W)
                         pca_vggt_images.append(pca_vggt_img.squeeze(dim=0))
                     cocnat_pca_images = run_pca(gaussian_feature[0], (H,W))
-                    cocnat_pca_vggt_images = run_pca(foundation_feature[0], (H,W)) 
-                    
+                    cocnat_pca_vggt_images = run_pca(foundation_feature[0], (H,W))
+
                     preds = []
                     targets = []
                     for i, (index, g_upfeat) in enumerate(zip(batch["target"]["index"][0], gaussian_feature)):
@@ -468,23 +477,23 @@ class ModelWrapper(LightningModule):
                             g_upfeat = foundation_feature[i]
                             if 'lseg' in self.train_cfg.reproj_model:
                                 g_upfeat = self.lseg_feature_extractor.scratch.output_conv(g_upfeat)
-                        
+
                         if 'text' in batch['target'].keys():
                             labelset = batch['target']['text']
                             labelset = [label[0] for label in labelset]
-                        else:  
+                        else:
                             labelset = self.test_cfg.labels
-                        
+
                         if self.train_cfg.reproj_model == 'lseg':
                             pred = self.lseg_feature_extractor.decode_feature(g_upfeat, labelset=labelset)
                         else:
                             pred = self.clip_decode_feature(g_upfeat, labelset=labelset)
-                                                    
+
                         pred = torch.argmax(pred, dim=1) + 1
 
                         target = batch["target"]["label"][0]
                         targets.append(target)
-                        
+
                         iou_val = self.miou(pred.flatten(), target.flatten())
                         acc_val = self.acc(pred.flatten(), target.flatten())
 
@@ -495,27 +504,27 @@ class ModelWrapper(LightningModule):
 
                         self.per_image_ious.append(iou_val.item())
                         self.per_image_accs.append(acc_val.item())
-                        
+
                         preds.append(pred)
 
                     seg_preds = []
                     seg_tgts = []
-                            
+
                     for pred in preds:
                         for index, seg_pred in zip(batch["target"]["index"][0], pred):
                             labels = self.test_cfg.labels[:8]
                             seg_pred_vis = save_segmap(gaussian_feature, seg_pred, index, save_dir, labels, self.test_cfg.color_hex_list)
                             seg_preds.append(seg_pred_vis)
-                            
+
                     for target in targets:
                         for index, seg_tgt in zip(batch["target"]["index"][0], target):
                             labels = self.test_cfg.labels[:8]
                             seg_tgt_vis = save_segmap(gaussian_feature, seg_tgt, index, save_gt_dir, labels, self.test_cfg.color_hex_list)
                             seg_tgts.append(seg_tgt_vis)
-                            
 
 
-                    
+
+
                     comparison = hcat(
                         add_label(vcat(*context_img), "Context"),
                         add_label(vcat(*rgb_gt), "Target (Ground Truth)"),
@@ -527,21 +536,21 @@ class ModelWrapper(LightningModule):
                         add_label(vcat(*seg_tgts), "Segmentation (GT)"),
                     )
                     save_image(comparison, path / f"{scene}_{psnr:.3f}_pca.png")
-                    
+
                 else:
                     pca_images, pca_vggt_images = [], []
-                    
+
                     V = gaussian_feature.shape[1]
-                    
+
                     for i in range(foundation_feature.shape[1]):
                         pca_gaussian_img = run_pca(gaussian_feature[0, i].unsqueeze(dim=0), (H,W))  # (C, H, W)
                         pca_images.append(pca_gaussian_img.squeeze(dim=0))
-                        
+
                         pca_vggt_img = run_pca(foundation_feature[0, i].unsqueeze(dim=0), (H,W))  # (C, H, W)
                         pca_vggt_images.append(pca_vggt_img.squeeze(dim=0))
-                        
+
                     cocnat_pca_images = run_pca(gaussian_feature[0], (H,W))
-                    cocnat_pca_vggt_images = run_pca(foundation_feature[0], (H,W)) 
+                    cocnat_pca_vggt_images = run_pca(foundation_feature[0], (H,W))
 
                     for i in range(len(cocnat_pca_images)):
                         save_image(cocnat_pca_images[i], path / f"{scene}_cocnat_pca{i}.png")
@@ -555,30 +564,30 @@ class ModelWrapper(LightningModule):
                         add_label(vcat(*cocnat_pca_images), "Feature_cat (Pred)"),
                     )
                     save_image(comparison, path / f"{scene}_{psnr:.3f}_pca.png")
-                    
+
     @torch.no_grad()
     def clip_decode_feature(self, image_features, labelset=''):
         imshape = image_features.shape      # B C H W
-        
+
         text = clip.tokenize(labelset)
-        
+
         text = text.to(image_features.device)
         if 'maskclip' in self.train_cfg.reproj_model:
             text_features = self.clip_model.model.model.encode_text(text)
         else:
             text_features = self.clip_model.encode_text(text)
         image_features = image_features.permute(0,2,3,1).reshape(-1, image_features.shape[1])
-        
+
         # normalized features
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        
+
         logits_per_image = image_features.half() @ text_features.t()
         out = logits_per_image.float().view(imshape[0], imshape[2], imshape[3], -1).permute(0,3,1,2)
 
         return out
 
-                    
+
     # image-level iou and acc
     def on_test_epoch_end(self):
         mean_iou = sum(self.per_image_ious) / len(self.per_image_ious) if self.per_image_ious else 0.0
@@ -621,16 +630,16 @@ class ModelWrapper(LightningModule):
             pose_optimizer = torch.optim.Adam(opt_params)
 
             extrinsics = batch["target"]["extrinsics"].clone()
-            
+
             if verbose:
                 logger = tqdm(range(self.test_cfg.pose_align_steps))
             else:
                 logger = range(self.test_cfg.pose_align_steps)
-                
+
             prev_loss = None
             patience_counter = 0
-            patience_limit = 10 
-            
+            patience_limit = 10
+
             with self.benchmarker.time("optimize"):
                 for i in logger:
                     pose_optimizer.zero_grad()
@@ -649,11 +658,11 @@ class ModelWrapper(LightningModule):
                     # Compute and log loss.
                     total_loss = 0
 
-                    
+
                     for loss_fn in self.losses:
                         loss = loss_fn.forward(output, batch, gaussians, self.global_step, target_image=batch["target"]["image"])
                         total_loss = total_loss + loss
-                        
+
                     if verbose:
                         logger.set_description(f"pose optim step {i}; loss = {total_loss:.6f}")
 
@@ -704,7 +713,7 @@ class ModelWrapper(LightningModule):
     @rank_zero_only
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         batch: BatchedExample = self.data_shim(batch)
-                
+
         if self.train_cfg.random_select_context_view:
             num_ctx_views = torch.randint(2, batch['context']['extrinsics'].shape[1] + 1, size=(1,)).item()
 
@@ -724,11 +733,11 @@ class ModelWrapper(LightningModule):
         b, _, _, h, w = batch["target"]["image"].shape
         assert b == 1
         visualization_dump = {}
-        
+
         context_feature = self.forward_foundation_model(batch['context']['image']) if self.encoder.cfg.feature_dim else None
-        
+
         gaussians = self.encoder(batch["context"], self.global_step, visualization_dump=visualization_dump, context_feature = context_feature)
-        
+
         output = self.decoder.forward(
             gaussians,
             batch["target"]["extrinsics"],
@@ -768,14 +777,14 @@ class ModelWrapper(LightningModule):
             add_label(vcat(*rgb_pred), "Target (Prediction)"),
             add_label(vcat(*depth_pred), "Depth (Prediction)"),
         )
-        
+
         self.logger.log_image(
             "comparison",
             [prep_image(add_border(comparison))],
             step=self.global_step,
             caption=batch["scene"],
         )
-        
+
         if self.train_cfg.feature_rendering_loss > 0:
             context_output = self.decoder.forward(
                 gaussians,
@@ -786,37 +795,37 @@ class ModelWrapper(LightningModule):
                 (h, w),
                 "depth",
             )
-            
+
             gaussian_feature = output.feature
             B,N,C,H,W = gaussian_feature.shape
-            
+
             context_gaussian_feature = context_output.feature
             B,CN,C,H,W = context_gaussian_feature.shape
             gaussian_feature = torch.cat((context_gaussian_feature, gaussian_feature), dim=1)
-            
+
             foundation_feature = self.forward_foundation_model(torch.cat((batch["context"]["image"], batch['target']['image'] * 2 - 1), dim=1))
             context_foundation_features = self.forward_foundation_model(batch["context"]["image"])
-            
-            
+
+
             pca_images, pca_vggt_images = [], []
             for i in range(foundation_feature.shape[1]):
                 pca_gaussian_img = run_pca(gaussian_feature[0, i].unsqueeze(dim=0), (H,W))  # (C, H, W)
                 pca_images.append(pca_gaussian_img.squeeze(dim=0))
-                
+
                 pca_vggt_img = run_pca(foundation_feature[0, i].unsqueeze(dim=0), (H,W))  # (C, H, W)
                 pca_vggt_images.append(pca_vggt_img.squeeze(dim=0))
-                
+
             cocnat_pca_images = run_pca(gaussian_feature[0], (H,W))
-            cocnat_pca_vggt_images = run_pca(foundation_feature[0], (H,W)) 
-            
-            pca_context_images = []   
+            cocnat_pca_vggt_images = run_pca(foundation_feature[0], (H,W))
+
+            pca_context_images = []
             for i in range(context_foundation_features.shape[1]):
                 pca_context_img = run_pca(context_foundation_features[0, i].unsqueeze(dim=0), (H,W))  # (C, H, W)
                 pca_context_images.append(pca_context_img.squeeze(dim=0))
-                
+
             context[1] = pca_context_images[0]
             context[3] = pca_context_images[1]
-            
+
             comparison = hcat(
                 add_label(vcat(*context), "Context"),
                 add_label(vcat(*rgb_gt), "Target (Ground Truth)"),
@@ -825,7 +834,7 @@ class ModelWrapper(LightningModule):
                 add_label(vcat(*cocnat_pca_vggt_images), "Feature_cat (VFM)"),
                 add_label(vcat(*cocnat_pca_images), "Feature_cat (Prediction)"),
             )
-            
+
             self.logger.log_image(
                 f"PCA",
                 [prep_image(add_border(comparison))],
@@ -843,7 +852,7 @@ class ModelWrapper(LightningModule):
                     low_pass = self.decoder.low_pass_filter,
                 )[0]
             )
-        
+
         self.logger.log_image(
             "projection",
             [prep_image(add_border(projections))],
@@ -981,7 +990,7 @@ class ModelWrapper(LightningModule):
             context_feature = self.forward_foundation_model(batch['context']['image'])
         else:
             context_feature = None
-        
+
         gaussians = self.encoder(batch["context"], self.global_step, context_feature = context_feature)
 
         t = torch.linspace(0, 1, num_frames, dtype=torch.float32, device=self.device)

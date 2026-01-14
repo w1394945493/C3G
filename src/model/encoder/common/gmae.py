@@ -41,7 +41,7 @@ class Attention(nn.Module):
         x = self.norm(x)
         qkv = self.to_qkv(x).chunk(3, dim = -1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), qkv)
-        
+
         if mask is not None:
             if mask.dim() == 3:
                 mask = mask.unsqueeze(1)
@@ -54,7 +54,7 @@ class Attention(nn.Module):
         )
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
-    
+
 class InstillAttention(nn.Module):
     def __init__(self, dim, heads = 8, dim_head = 64, dropout = 0., cfg=None):
         super().__init__()
@@ -63,7 +63,7 @@ class InstillAttention(nn.Module):
 
         self.heads = heads
         self.scale = dim_head ** -0.5
-
+        
         self.norm = nn.LayerNorm(dim)
         self.attend = nn.Softmax(dim = -1)
         self.dropout = nn.Dropout(dropout)
@@ -72,15 +72,15 @@ class InstillAttention(nn.Module):
             nn.Linear(inner_dim, dim),
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
-        
+
         feature_dim = cfg.feature_dim if cfg.different_learnable_tokens else dim
         self.to_anotherv = nn.Linear(feature_dim, inner_dim, bias = False)
-        
+
         self.to_yout = nn.Sequential(
             nn.Linear(inner_dim, feature_dim),
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
-        
+
 
     def forward(self, x, y, mask = None):
         x = self.norm(x)
@@ -100,13 +100,13 @@ class InstillAttention(nn.Module):
         )
         x_out = rearrange(x_out, 'b h n d -> b n (h d)')
         x_out = self.to_out(x_out)
-        
+
         y_out = F.scaled_dot_product_attention(
             q, k, another_v, attn_mask=attn_mask, dropout_p=self.dropout.p if self.training else 0.0
         )
         y_out = rearrange(y_out, 'b h n d -> b n (h d)')
         y_out = self.to_yout(y_out)
-        
+
         return x_out, y_out
 
 class Transformer(nn.Module):
@@ -126,7 +126,7 @@ class Transformer(nn.Module):
             x = attn(x, mask) + x
             x = ff(x) + x
         return self.norm(x)
-    
+
 class InstillTransformer(nn.Module):
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout = 0., cfg=None):
         super().__init__()
@@ -136,7 +136,7 @@ class InstillTransformer(nn.Module):
         self.layers = nn.ModuleList([])
         self.cfg = cfg
         self.y_norm = nn.LayerNorm(feature_dim)
-        for _ in range(depth):                
+        for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 InstillAttention(dim, heads = heads, dim_head = dim_head, dropout = dropout, cfg=cfg),
                 FeedForward(dim, mlp_dim, dropout = dropout),
@@ -145,7 +145,7 @@ class InstillTransformer(nn.Module):
 
     def forward(self, x, mask = None, context_feature=None):
         for attn, ff1, ff2 in self.layers:
-            
+
             x_attn, y_attn = attn(x, context_feature, mask)
             x = x_attn + x
             context_feature = y_attn + context_feature

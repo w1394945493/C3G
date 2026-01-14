@@ -132,7 +132,7 @@ class UnifiedGaussianAdapter(GaussianAdapter):
         opacities: Float[Tensor, "*#batch"],
         raw_gaussians: Float[Tensor, "*#batch _"],
         eps: float = 1e-8,
-        intrinsics: Optional[Float[Tensor, "*#batch 3 3"]] = None,
+        intrinsics: Optional[Float[Tensor, "*#batch 3 3"]] = None, # todo 相机内外参 None
         coordinates: Optional[Float[Tensor, "*#batch 2"]] = None,
         features = None,
     ) -> Gaussians:
@@ -142,7 +142,7 @@ class UnifiedGaussianAdapter(GaussianAdapter):
         ### WHAT IS THIS
         if self.cfg.clamping > 0:
             scales = scales.clamp_max(self.cfg.clamping)
-            
+
         if self.cfg.isotrophic_covariance:
             scales = scales.mean(dim=-1, keepdim=True).expand_as(scales)
 
@@ -151,10 +151,10 @@ class UnifiedGaussianAdapter(GaussianAdapter):
 
         sh = rearrange(sh, "... (xyz d_sh) -> ... xyz d_sh", xyz=3)
         sh = sh.broadcast_to((*opacities.shape, 3, self.d_sh)) * self.sh_mask
-        
+
         opacities = torch.max(opacities, torch.tensor(self.cfg.opacity_min))
 
-        covariances = build_covariance(scales, rotations)
+        covariances = build_covariance(scales, rotations)  
 
         return Gaussians(
             means=means,
