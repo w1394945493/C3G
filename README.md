@@ -13,7 +13,8 @@
     ·
     <a href="https://onground.github.io/">Jisang Han</a><sup>1</sup>
     ·
-    <a href="">Kazumi Fukuda</a><sup>3</sup> <br>
+    <a href="">Kazumi Fukuda</a><sup>3</sup>
+    ·
     <a href="">Takuya Narihira</a><sup>3†</sup>
     .
     <a href="">Hyuna Ko</a><sup>1</sup>
