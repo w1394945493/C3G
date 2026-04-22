@@ -7,37 +7,38 @@
     ·
     <a href="">Mungyeom Kim</a><sup>1</sup>
     .
-    <a href="https://sunghwanhong.github.io/">Sunghwan Hong</a><sup>2</sup>
-    ·
     <a href="https://kchyun.github.io/">Chaehyun Kim</a><sup>1</sup>
-    ·
-    <a href="">Kazumi Fukuda</a><sup>3</sup>
     ·
     <a href="https://sites.google.com/view/minjeon/home">Minkyeong Jeon</a><sup>1</sup>
     ·
     <a href="https://onground.github.io/">Jisang Han</a><sup>1</sup>
     ·
-    <a href="">Takuya Narihira</a><sup>3</sup>
+    <a href="">Kazumi Fukuda</a><sup>3</sup>
+    ·
+    <a href="">Takuya Narihira</a><sup>3†</sup>
     .
     <a href="">Hyuna Ko</a><sup>1</sup>
     .
     <a href="">Junsu Kim</a><sup>1</sup>
     .
+    <a href="https://sunghwanhong.github.io/">Sunghwan Hong</a><sup>2†</sup>
+    ·
     <a href="https://www.yukimitsufuji.com/">Yuki Mitsfuji</a><sup>3,4†</sup>
     .
     <a href="https://cvlab.kaist.ac.kr/members/faculty">Seungryong Kim</a><sup>1†</sup>
   </p>
   <h4 align="center"><sup>1</sup>KAIST AI, <sup>2</sup>ETH AI Center, ETH Zurich, <sup>3</sup>SONY AI, <sup>4</sup>Sony Group Corporation</h4>
 
-  <p align='center'><sup>*</sup>Co-first author, †Co-corresponding author</p>
+  <p align='center'><sup>*</sup>Co-first author, †Co-advising author</p>
 
+  <h3 align="center">CVPR 2026</h3>
   <h3 align="center"><a href="https://arxiv.org/abs/2512.04021">Paper</a> | <a href="https://cvlab-kaist.github.io/C3G">Project Page</a></h3>
   <div align="center"></div>
 </p>
 
 <p align="center">
   <a href="">
-    <img src="assets/teaser.png" alt="Logo" width="90%">
+    <img src="assets/teaser.jpg" alt="Logo" width="100%">
   </a>
 </p>
 
@@ -71,7 +72,7 @@ Then, you should download VGGT pretrained weights from [VGGT](https://github.com
 Here is an example:
 ```
 mkdir -p pretrained_weights
-wget https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt?download=true -O ./pretrained_wegiths/model.pt
+wget https://huggingface.co/facebook/VGGT-1B/resolve/main/model.pt?download=true -O ./pretrained_weights/model.pt
 ```
 
 
